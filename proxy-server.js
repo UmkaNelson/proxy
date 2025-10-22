@@ -13,12 +13,10 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Логирование всех запросов
 app.use((req, res, next) => {
     console.log(`📨 [${new Date().toISOString()}] ${req.method} ${req.path}`);
-    console.log(`📍 Origin: ${req.get('origin') || 'No origin'}`);
-    console.log(`📱 User-Agent: ${req.get('user-agent')}`);
     next();
 });
 
-// Корневой путь - информационная страница
+// Корневой путь
 app.get('/', (req, res) => {
     res.json({
         service: 'FoodAI Proxy Server',
@@ -27,10 +25,8 @@ app.get('/', (req, res) => {
         endpoints: {
             health: 'GET /health',
             test: 'GET /proxy/test',
-            debug: 'GET /proxy/debug',
             gemini_vision: 'POST /proxy/gemini-vision'
-        },
-        usage: 'Это прокси-сервер для iOS приложения FoodAI'
+        }
     });
 });
 
@@ -39,28 +35,8 @@ app.get('/health', (req, res) => {
     res.json({ 
         status: 'healthy', 
         service: 'FoodAI Proxy Server',
-        timestamp: new Date().toISOString(),
-        version: '1.0.0'
+        timestamp: new Date().toISOString()
     });
-});
-
-// Детальный тестовый эндпоинт
-app.get('/proxy/debug', (req, res) => {
-    const serverInfo = {
-        status: 'running',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        memory: process.memoryUsage(),
-        environment: process.env.NODE_ENV || 'development',
-        endpoints: [
-            'GET /',
-            'GET /health',
-            'GET /proxy/test', 
-            'GET /proxy/debug',
-            'POST /proxy/gemini-vision'
-        ]
-    };
-    res.json(serverInfo);
 });
 
 // Тестовый эндпоинт
@@ -68,12 +44,11 @@ app.get('/proxy/test', (req, res) => {
     res.json({ 
         status: 'OK', 
         message: 'Прокси-сервер работает!',
-        timestamp: new Date().toISOString(),
-        version: '1.0.0'
+        timestamp: new Date().toISOString()
     });
 });
 
-// Прокси для Gemini Vision API
+// Прокси для Gemini Vision API с правильной моделью
 app.post('/proxy/gemini-vision', async (req, res) => {
     const startTime = Date.now();
     
@@ -82,120 +57,98 @@ app.post('/proxy/gemini-vision', async (req, res) => {
         
         const { imageBase64, apiKey } = req.body;
         
-        if (!imageBase64) {
-            console.log('❌ Отсутствует изображение');
+        if (!imageBase64 || !apiKey) {
             return res.status(400).json({ 
-                error: 'Отсутствует обязательный параметр: imageBase64'
+                error: 'Отсутствуют обязательные параметры: imageBase64, apiKey' 
             });
         }
 
-        if (!apiKey) {
-            console.log('❌ Отсутствует API ключ');
-            return res.status(400).json({ 
-                error: 'Отсутствует обязательный параметр: apiKey'
-            });
-        }
+        // Используем актуальные модели Gemini
+        const geminiURLs = [
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}`,
+            `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${apiKey}`
+        ];
 
-        const geminiURL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key=${apiKey}`;
-        
-        console.log('🔄 Отправка запроса к Gemini API...');
-        
-        const response = await fetch(geminiURL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                contents: [
-                    {
-                        parts: [
+        let lastError = null;
+
+        for (const geminiURL of geminiURLs) {
+            try {
+                console.log(`🔄 Пробуем модель: ${geminiURL.split('/models/')[1].split(':')[0]}`);
+                
+                const response = await fetch(geminiURL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        contents: [
                             {
-                                text: `Ты - эксперт по питанию и шеф-повар. Проанализируй изображение еды и верни ответ в формате JSON.
-                                
-Требуемый формат:
+                                parts: [
+                                    {
+                                        text: `Ты - эксперт по питанию. Проанализируй изображение еды и верни JSON в формате:
 {
-  "dish_name": "название блюда на русском",
+  "dish_name": "название блюда",
   "ingredients": ["ингредиент1", "ингредиент2"],
   "calories": число,
   "protein": число,
   "fat": число,
   "carbs": число,
   "confidence": число от 0 до 1,
-  "description": "краткое описание на русском",
+  "description": "описание",
   "estimated_weight": число
 }
 
-Правила анализа:
-1. Определи основные ингредиенты
-2. Оцени размер порции
-3. Учти метод приготовления
-4. Будь реалистичен в оценке КБЖУ
-5. Если не уверен - укажи confidence ниже 0.5
-
-Верни ТОЛЬКО JSON без дополнительного текста.`
-                            },
-                            {
-                                inlineData: {
-                                    mimeType: "image/jpeg",
-                                    data: imageBase64
-                                }
+Верни ТОЛЬКО JSON.`
+                                    },
+                                    {
+                                        inlineData: {
+                                            mimeType: "image/jpeg",
+                                            data: imageBase64
+                                        }
+                                    }
+                                ]
                             }
-                        ]
-                    }
-                ],
-                generationConfig: {
-                    temperature: 0.1,
-                    maxOutputTokens: 2048,
+                        ],
+                        generationConfig: {
+                            temperature: 0.1,
+                            maxOutputTokens: 2048,
+                        }
+                    })
+                });
+
+                console.log(`📡 Статус Gemini: ${response.status}`);
+
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('✅ Успешный ответ от Gemini API');
+                    return res.json(data);
+                } else {
+                    const errorText = await response.text();
+                    lastError = `Модель ${geminiURL.split('/models/')[1].split(':')[0]}: ${response.status} - ${errorText.substring(0, 200)}`;
+                    console.log(`❌ ${lastError}`);
+                    // Продолжаем пробовать следующую модель
                 }
-            })
-        });
-
-        const responseTime = Date.now() - startTime;
-        console.log(`⏱ Время ответа Gemini: ${responseTime}ms`);
-        console.log(`📡 Статус Gemini: ${response.status}`);
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('❌ Ошибка от Gemini API:', errorText);
-            return res.status(response.status).json({ 
-                error: `Gemini API error: ${response.status}`,
-                details: errorText.substring(0, 500)
-            });
+            } catch (error) {
+                lastError = error.message;
+                console.log(`❌ Ошибка с моделью: ${error.message}`);
+                // Продолжаем пробовать следующую модель
+            }
         }
 
-        const data = await response.json();
-        console.log('✅ Успешный ответ от Gemini API');
-        
-        res.json(data);
+        // Если все модели не сработали
+        throw new Error(`Все модели Gemini недоступны. Последняя ошибка: ${lastError}`);
+
     } catch (error) {
         const responseTime = Date.now() - startTime;
         console.error(`🔥 Ошибка за ${responseTime}ms:`, error);
         res.status(500).json({ 
             error: 'Internal server error',
-            message: error.message,
-            responseTime: responseTime
+            message: error.message
         });
     }
 });
 
-// 404 handler
-app.use('*', (req, res) => {
-    res.status(404).json({
-        error: 'Endpoint not found',
-        availableEndpoints: [
-            'GET /',
-            'GET /health',
-            'GET /proxy/test',
-            'GET /proxy/debug', 
-            'POST /proxy/gemini-vision'
-        ]
-    });
-});
-
 app.listen(PORT, () => {
     console.log(`🚀 Proxy server running on port ${PORT}`);
-    console.log(`📍 Main: http://localhost:${PORT}/`);
-    console.log(`📍 Health: http://localhost:${PORT}/health`);
-    console.log(`📍 Test: http://localhost:${PORT}/proxy/test`);
-    console.log(`📍 Debug: http://localhost:${PORT}/proxy/debug`);
 });
