@@ -18,20 +18,81 @@ app.use((req, res, next) => {
     next();
 });
 
+// Корневой путь - информационная страница
+app.get('/', (req, res) => {
+    res.json({
+        service: 'FoodAI Proxy Server',
+        status: 'running',
+        timestamp: new Date().toISOString(),
+        endpoints: {
+            health: 'GET /health',
+            test: 'GET /proxy/test',
+            debug: 'GET /proxy/debug',
+            gemini_vision: 'POST /proxy/gemini-vision'
+        },
+        usage: 'Это прокси-сервер для iOS приложения FoodAI'
+    });
+});
+
+// Health check
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'healthy', 
+        service: 'FoodAI Proxy Server',
+        timestamp: new Date().toISOString(),
+        version: '1.0.0'
+    });
+});
+
+// Детальный тестовый эндпоинт
+app.get('/proxy/debug', (req, res) => {
+    const serverInfo = {
+        status: 'running',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        environment: process.env.NODE_ENV || 'development',
+        endpoints: [
+            'GET /',
+            'GET /health',
+            'GET /proxy/test', 
+            'GET /proxy/debug',
+            'POST /proxy/gemini-vision'
+        ]
+    };
+    res.json(serverInfo);
+});
+
+// Тестовый эндпоинт
+app.get('/proxy/test', (req, res) => {
+    res.json({ 
+        status: 'OK', 
+        message: 'Прокси-сервер работает!',
+        timestamp: new Date().toISOString(),
+        version: '1.0.0'
+    });
+});
+
 // Прокси для Gemini Vision API
 app.post('/proxy/gemini-vision', async (req, res) => {
     const startTime = Date.now();
     
     try {
         console.log('📨 Получен запрос на анализ изображения...');
-        console.log(`📊 Размер данных: ${JSON.stringify(req.body).length} байт`);
         
         const { imageBase64, apiKey } = req.body;
         
-        if (!imageBase64 || !apiKey) {
-            console.log('❌ Отсутствуют обязательные параметры');
+        if (!imageBase64) {
+            console.log('❌ Отсутствует изображение');
             return res.status(400).json({ 
-                error: 'Отсутствуют обязательные параметры: imageBase64, apiKey' 
+                error: 'Отсутствует обязательный параметр: imageBase64'
+            });
+        }
+
+        if (!apiKey) {
+            console.log('❌ Отсутствует API ключ');
+            return res.status(400).json({ 
+                error: 'Отсутствует обязательный параметр: apiKey'
             });
         }
 
@@ -49,7 +110,29 @@ app.post('/proxy/gemini-vision', async (req, res) => {
                     {
                         parts: [
                             {
-                                text: `Ты - эксперт по питанию. Проанализируй изображение еды и верни JSON.`
+                                text: `Ты - эксперт по питанию и шеф-повар. Проанализируй изображение еды и верни ответ в формате JSON.
+                                
+Требуемый формат:
+{
+  "dish_name": "название блюда на русском",
+  "ingredients": ["ингредиент1", "ингредиент2"],
+  "calories": число,
+  "protein": число,
+  "fat": число,
+  "carbs": число,
+  "confidence": число от 0 до 1,
+  "description": "краткое описание на русском",
+  "estimated_weight": число
+}
+
+Правила анализа:
+1. Определи основные ингредиенты
+2. Оцени размер порции
+3. Учти метод приготовления
+4. Будь реалистичен в оценке КБЖУ
+5. Если не уверен - укажи confidence ниже 0.5
+
+Верни ТОЛЬКО JSON без дополнительного текста.`
                             },
                             {
                                 inlineData: {
@@ -82,7 +165,6 @@ app.post('/proxy/gemini-vision', async (req, res) => {
 
         const data = await response.json();
         console.log('✅ Успешный ответ от Gemini API');
-        console.log(`📄 Длина ответа: ${JSON.stringify(data).length} байт`);
         
         res.json(data);
     } catch (error) {
@@ -96,49 +178,12 @@ app.post('/proxy/gemini-vision', async (req, res) => {
     }
 });
 
-// Детальный тестовый эндпоинт
-app.get('/proxy/debug', (req, res) => {
-    const serverInfo = {
-        status: 'running',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        memory: process.memoryUsage(),
-        environment: process.env.NODE_ENV || 'development',
-        endpoints: [
-            '/health',
-            '/proxy/test', 
-            '/proxy/debug',
-            '/proxy/gemini-vision (POST)'
-        ]
-    };
-    res.json(serverInfo);
-});
-
-// Тестовый эндпоинт
-app.get('/proxy/test', (req, res) => {
-    res.json({ 
-        status: 'OK', 
-        message: 'Прокси-сервер работает!',
-        timestamp: new Date().toISOString(),
-        version: '1.0.0'
-    });
-});
-
-// Health check
-app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'healthy', 
-        service: 'FoodAI Proxy Server',
-        timestamp: new Date().toISOString(),
-        region: process.env.REGION || 'unknown'
-    });
-});
-
 // 404 handler
 app.use('*', (req, res) => {
     res.status(404).json({
         error: 'Endpoint not found',
         availableEndpoints: [
+            'GET /',
             'GET /health',
             'GET /proxy/test',
             'GET /proxy/debug', 
@@ -149,6 +194,7 @@ app.use('*', (req, res) => {
 
 app.listen(PORT, () => {
     console.log(`🚀 Proxy server running on port ${PORT}`);
+    console.log(`📍 Main: http://localhost:${PORT}/`);
     console.log(`📍 Health: http://localhost:${PORT}/health`);
     console.log(`📍 Test: http://localhost:${PORT}/proxy/test`);
     console.log(`📍 Debug: http://localhost:${PORT}/proxy/debug`);
